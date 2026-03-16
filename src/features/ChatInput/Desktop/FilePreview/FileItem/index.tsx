@@ -1,19 +1,16 @@
-import { ActionIcon } from '@lobehub/ui';
-import { Typography } from 'antd';
-import { createStyles } from 'antd-style';
+import { ActionIcon, Block, Center, Flexbox, Text } from '@lobehub/ui';
+import { createStaticStyles, cssVar } from 'antd-style';
 import { Trash2Icon } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Center, Flexbox } from 'react-layout-kit';
 
 import { useFileStore } from '@/store/file';
-import { UploadFileItem } from '@/types/files/upload';
+import { type UploadFileItem } from '@/types/files/upload';
 
 import UploadDetail from '../../../components/UploadDetail';
 import Content from './Content';
-import { FILE_ITEM_SIZE } from './style';
 
-const useStyles = createStyles(({ css, token }) => ({
+const styles = createStaticStyles(({ css }) => ({
   actions: css`
     position: absolute;
     z-index: 10;
@@ -22,20 +19,19 @@ const useStyles = createStyles(({ css, token }) => ({
 
     border-radius: 5px;
 
-    background: ${token.colorBgElevated};
+    background: ${cssVar.colorBgElevated};
     box-shadow:
-      0 0 0 0.5px ${token.colorFillSecondary} inset,
-      ${token.boxShadowTertiary};
+      0 0 0 0.5px ${cssVar.colorFillSecondary} inset,
+      ${cssVar.boxShadowTertiary};
   `,
   container: css`
+    user-select: none;
+
     position: relative;
 
-    width: ${FILE_ITEM_SIZE}px;
-    min-width: ${FILE_ITEM_SIZE}px;
-    height: ${FILE_ITEM_SIZE}px;
+    width: 180px;
+    height: 64px;
     border-radius: 8px;
-
-    background: ${token.colorBgContainer};
   `,
   image: css`
     margin-block: 0 !important;
@@ -50,38 +46,39 @@ const useStyles = createStyles(({ css, token }) => ({
 
 type FileItemProps = UploadFileItem;
 
-const spacing = 8;
-
 const FileItem = memo<FileItemProps>((props) => {
   const { file, uploadState, status, id, tasks } = props;
   const { t } = useTranslation(['chat', 'common']);
-  const { styles } = useStyles();
   const [removeChatUploadFile] = useFileStore((s) => [s.removeChatUploadFile]);
 
   return (
-    <Flexbox className={styles.container} distribution={'space-between'}>
-      <Center flex={1} height={FILE_ITEM_SIZE - 46} padding={spacing}>
+    <Block horizontal align={'center'} className={styles.container} variant={'outlined'}>
+      <Center flex={1} height={64} padding={4} style={{ maxWidth: 64 }}>
         <Content {...props} />
       </Center>
-      <Flexbox gap={4} style={{ paddingBottom: 4, paddingInline: spacing }}>
-        <Typography.Text ellipsis={{ tooltip: true }} style={{ fontSize: 12 }}>
+      <Flexbox flex={1} gap={4} style={{ paddingBottom: 4, paddingInline: 4 }}>
+        <Text
+          style={{ fontSize: 12, maxWidth: 88 }}
+          ellipsis={{
+            tooltip: file.name,
+          }}
+        >
           {file.name}
-        </Typography.Text>
-
+        </Text>
         <UploadDetail size={file.size} status={status} tasks={tasks} uploadState={uploadState} />
       </Flexbox>
       <Flexbox className={styles.actions}>
         <ActionIcon
           color={'red'}
           icon={Trash2Icon}
+          size={'small'}
+          title={t('delete', { ns: 'common' })}
           onClick={() => {
             removeChatUploadFile(id);
           }}
-          size={'small'}
-          title={t('delete', { ns: 'common' })}
         />
       </Flexbox>
-    </Flexbox>
+    </Block>
   );
 });
 

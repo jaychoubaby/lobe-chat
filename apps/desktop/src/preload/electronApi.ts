@@ -2,6 +2,7 @@ import { electronAPI } from '@electron-toolkit/preload';
 import { contextBridge } from 'electron';
 
 import { invoke } from './invoke';
+import { onStreamInvoke } from './streamer';
 
 export const setupElectronApi = () => {
   // Use `contextBridge` APIs to expose Electron APIs to
@@ -14,5 +15,18 @@ export const setupElectronApi = () => {
     console.error(error);
   }
 
-  contextBridge.exposeInMainWorld('electronAPI', { invoke });
+  contextBridge.exposeInMainWorld('electronAPI', {
+    invoke,
+    onStreamInvoke,
+  });
+
+  const os = require('node:os');
+  const osInfo = os.release();
+  const darwinMajorVersion = Number(osInfo.split('.')[0]);
+
+  contextBridge.exposeInMainWorld('lobeEnv', {
+    darwinMajorVersion,
+    isMacTahoe: process.platform === 'darwin' && darwinMajorVersion >= 25,
+    platform: process.platform,
+  });
 };

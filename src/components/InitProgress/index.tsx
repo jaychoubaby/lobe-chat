@@ -1,9 +1,9 @@
-import { Icon } from '@lobehub/ui';
-import { Progress, Typography } from 'antd';
-import { useTheme } from 'antd-style';
+import { Center, Flexbox, Icon, Text } from '@lobehub/ui';
+import { Progress } from 'antd';
+import { cssVar } from 'antd-style';
 import { Loader2 } from 'lucide-react';
-import { ReactNode, memo } from 'react';
-import { Center, Flexbox } from 'react-layout-kit';
+import { type ReactNode } from 'react';
+import { memo } from 'react';
 
 export interface StageObjectItem {
   icon?: ReactNode;
@@ -17,8 +17,6 @@ interface InitingProps {
 }
 
 const InitProgress = memo<InitingProps>(({ activeStage, stages }) => {
-  const theme = useTheme();
-
   const outStage = stages[activeStage];
   const percent = (activeStage / (stages.length - 1)) * 100;
 
@@ -29,11 +27,11 @@ const InitProgress = memo<InitingProps>(({ activeStage, stages }) => {
       <Progress
         percent={parseInt(percent.toFixed(0))}
         showInfo={false}
-        strokeColor={theme.colorPrimary}
+        strokeColor={cssVar.colorPrimary}
       />
-      <Flexbox align={'center'} gap={4} horizontal>
-        {stage?.icon ? stage?.icon : <Icon icon={Loader2} spin />}
-        <Typography.Text type={'secondary'}>{stage?.text}</Typography.Text>
+      <Flexbox horizontal align={'center'} gap={4}>
+        {stage?.icon ? stage?.icon : <Icon spin icon={Loader2} />}
+        <Text type={'secondary'}>{stage?.text}</Text>
       </Flexbox>
     </Center>
   );

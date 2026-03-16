@@ -1,11 +1,11 @@
-import debug from 'debug';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
+import debug from 'debug';
+
 import { SOCK_FILE, SOCK_INFO_FILE, WINDOW_PIPE_FILE } from './const';
-import { ServerDispatchEventKey } from './events';
 
 const log = debug('electron-server-ipc:client');
 
@@ -15,7 +15,7 @@ export class ElectronIpcClient {
   private socket: net.Socket | null = null;
   // eslint-disable-next-line @typescript-eslint/ban-types
   private requestQueue: Map<string, { reject: Function; resolve: Function }> = new Map();
-  // eslint-disable-next-line no-undef
+
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private connectionAttempts: number = 0;
   private maxConnectionAttempts: number = 5;
@@ -28,19 +28,19 @@ export class ElectronIpcClient {
     this.initialize();
   }
 
-  // 初始化客户端
+  // Initialize client
   private initialize() {
     try {
       const tempDir = os.tmpdir();
 
-      // Windows 平台强制使用命名管道
+      // Force use of named pipe on Windows platform
       if (process.platform === 'win32') {
         this.socketPath = WINDOW_PIPE_FILE(this.appId);
         log('Using named pipe for Windows: %s', this.socketPath);
         return;
       }
 
-      // 其他平台尝试读取 sock info 文件
+      // Try to read sock info file on other platforms
       const socketInfoPath = path.join(tempDir, SOCK_INFO_FILE(this.appId));
 
       log('Looking for socket info at: %s', socketInfoPath);
@@ -49,7 +49,7 @@ export class ElectronIpcClient {
         this.socketPath = socketInfo.socketPath;
         log('Found socket path: %s', this.socketPath);
       } else {
-        // 如果找不到套接字信息，使用默认 sock 文件路径
+        // If socket information is not found, use default sock file path
         this.socketPath = path.join(tempDir, SOCK_FILE(this.appId));
         log('Socket info not found, using default sock path: %s', this.socketPath);
       }
@@ -59,7 +59,7 @@ export class ElectronIpcClient {
     }
   }
 
-  // 连接到 Electron IPC 服务器
+  // Connect to Electron IPC server
   private connect(): Promise<void> {
     if (this.connected || !this.socketPath) {
       log('Connection skipped: Connected=%s, SocketPath=%s', this.connected, !!this.socketPath);
@@ -80,18 +80,18 @@ export class ElectronIpcClient {
           const dataStr = data.toString();
           log('Received data: %s', dataStr.length > 100 ? `${dataStr.slice(0, 100)}...` : dataStr);
 
-          // 将新数据添加到缓冲区
+          // Add new data to buffer
           this.dataBuffer += dataStr;
 
-          // 按换行符分割消息
+          // Split messages by newline
           const messages = this.dataBuffer.split('\n');
 
-          // 最后一个元素可能是不完整的消息，保留在缓冲区
+          // The last element may be an incomplete message, keep it in buffer
           this.dataBuffer = messages.pop() || '';
           log('Buffer remainder: %d bytes', this.dataBuffer.length);
 
           for (const message of messages) {
-            if (!message.trim()) continue; // 跳过空消息
+            if (!message.trim()) continue; // Skip empty messages
 
             try {
               const response = JSON.parse(message);
@@ -138,20 +138,20 @@ export class ElectronIpcClient {
     });
   }
 
-  // 处理断开连接
+  // Handle disconnection
   private handleDisconnect() {
     log('Handling disconnect, connection attempts: %d', this.connectionAttempts);
-    // 清除重连定时器
+    // Clear reconnection timer
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
       log('Cleared reconnect timeout');
     }
 
-    // 清空数据缓冲区
+    // Clear data buffer
     this.dataBuffer = '';
 
-    // 拒绝所有待处理的请求
+    // Reject all pending requests
     const pendingCount = this.requestQueue.size;
     log('Rejecting %d pending requests', pendingCount);
     for (const [id, { reject }] of this.requestQueue) {
@@ -160,7 +160,7 @@ export class ElectronIpcClient {
     }
     this.requestQueue.clear();
 
-    // 尝试重新连接
+    // Attempt to reconnect
     if (this.connectionAttempts < this.maxConnectionAttempts) {
       this.connectionAttempts++;
       const delay = Math.min(1000 * Math.pow(2, this.connectionAttempts - 1), 30_000);
@@ -177,14 +177,14 @@ export class ElectronIpcClient {
     }
   }
 
-  // 发送请求到 Electron IPC 服务器
-  public async sendRequest<T>(method: ServerDispatchEventKey, params: any = {}): Promise<T> {
+  // Send request to Electron IPC server
+  public async sendRequest<T>(method: string, params: any = {}): Promise<T> {
     if (!this.socketPath) {
       console.error('Cannot send request: Electron IPC connection not available');
       throw new Error('Electron IPC connection not available');
     }
 
-    // 如果未连接，先连接
+    // Connect first if not connected
     if (!this.connected) {
       log('Not connected, connecting before sending request');
       await this.connect();
@@ -192,44 +192,78 @@ export class ElectronIpcClient {
 
     log('Sending request: %s %o', method, params);
     return new Promise<T>((resolve, reject) => {
-      try {
-        const id = Math.random().toString(36).slice(2, 15);
-        const request = { id, method, params };
-        log('Created request with ID: %s', id);
+      const id = Math.random().toString(36).slice(2, 15);
+      const request = { id, method, params };
+      log('Created request with ID: %s', id);
 
-        // 将请求添加到队列
-        this.requestQueue.set(id, { reject, resolve });
-        log('Added request to queue, current queue size: %d', this.requestQueue.size);
+      const cleanupAndResolve = (value: T) => {
+        clearTimeout(requestTimeoutId);
+        this.requestQueue.delete(id);
+        resolve(value);
+      };
 
-        // 设置超时
-        const timeout = setTimeout(() => {
-          this.requestQueue.delete(id);
-          const errorMsg = `Request timed out, method: ${method}`;
+      const cleanupAndReject = (error: any) => {
+        clearTimeout(requestTimeoutId);
+        this.requestQueue.delete(id);
+        // Keep console.error log for timeout errors
+        if (
+          error &&
+          error.message &&
+          typeof error.message === 'string' &&
+          error.message.startsWith('Request timed out')
+        ) {
           console.error('Request timed out, ID: %s, method: %s', id, method);
-          reject(new Error(errorMsg));
-        }, 5000);
+        }
+        reject(error);
+      };
 
-        // 发送请求
-        const requestJson = JSON.stringify(request);
+      this.requestQueue.set(id, { reject: cleanupAndReject, resolve: cleanupAndResolve });
+      log('Added request to queue, current queue size: %d', this.requestQueue.size);
+
+      const requestTimeoutId: NodeJS.Timeout = setTimeout(() => {
+        const pendingRequest = this.requestQueue.get(id);
+        if (pendingRequest) {
+          // Request is still in queue, indicating timeout
+          // Call its dedicated reject handler (cleanupAndReject)
+          const errorMsg = `Request timed out, method: ${method}`;
+          // console.error is handled in cleanupAndReject
+          pendingRequest.reject(new Error(errorMsg));
+        }
+        // If pendingRequest does not exist, the request has been processed and its timeout has been cleared
+      }, 5000);
+
+      try {
+        // Send request
+        const requestJson = JSON.stringify(request) + '\n';
         log('Writing request to socket, size: %d bytes', requestJson.length);
         this.socket!.write(requestJson, (err) => {
           if (err) {
-            clearTimeout(timeout);
-            this.requestQueue.delete(id);
+            // Write failed, request should be treated as failed
+            // Call its reject handler (cleanupAndReject)
+            const pending = this.requestQueue.get(id);
+            if (pending) {
+              pending.reject(err); // This will call cleanupAndReject
+            } else {
+              // This should not happen in theory, as write failures are usually quick
+              // But for safety, ensure the original promise is rejected
+              cleanupAndReject(err);
+            }
             console.error('Failed to write request to socket: %o', err);
-            reject(err);
           } else {
             log('Request successfully written to socket, ID: %s', id);
           }
         });
       } catch (err) {
-        console.error('Error sending request: %o', err);
-        reject(err);
+        console.error('Error sending request (during setup/write phase): %o', err);
+        // Error occurring here means the request didn't even have a chance to enter the queue or set timeout
+        // Call cleanupAndReject directly to ensure consistency, although requestTimeoutId may be undefined at this point
+        // (clearTimeout(undefined) is safe)
+        cleanupAndReject(err);
       }
     });
   }
 
-  // 关闭连接
+  // Close connection
   public close() {
     log('Closing client connection');
     if (this.reconnectTimeout) {

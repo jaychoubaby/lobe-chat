@@ -1,19 +1,18 @@
-import { Icon, Tag } from '@lobehub/ui';
-import { Typography } from 'antd';
+import { type ChatPluginPayload } from '@lobechat/types';
+import { Flexbox, Icon, Tag, Text } from '@lobehub/ui';
+import { cx } from 'antd-style';
 import isEqual from 'fast-deep-equal';
 import { CircuitBoard } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Flexbox } from 'react-layout-kit';
 
 import PluginAvatar from '@/features/PluginAvatar';
 import { useYamlArguments } from '@/hooks/useYamlArguments';
 import { useChatStore } from '@/store/chat';
 import { pluginHelpers, useToolStore } from '@/store/tool';
 import { toolSelectors } from '@/store/tool/selectors';
-import { ChatPluginPayload } from '@/types/message';
 
-import { useStyles } from './style';
+import { styles } from './style';
 
 export interface ArtifactItemProps {
   identifier?: string;
@@ -23,7 +22,6 @@ export interface ArtifactItemProps {
 
 const ArtifactItem = memo<ArtifactItemProps>(({ payload, messageId, identifier = 'unknown' }) => {
   const { t } = useTranslation('plugin');
-  const { styles, cx } = useStyles();
 
   const args = useYamlArguments(payload?.arguments);
 
@@ -34,28 +32,28 @@ const ArtifactItem = memo<ArtifactItemProps>(({ payload, messageId, identifier =
 
   return (
     <Flexbox
+      horizontal
       align={'center'}
       className={styles.container}
       gap={8}
-      horizontal
       onClick={() => {
         if (!isToolHasUI || !identifier) return;
 
         openToolUI(messageId, identifier);
       }}
     >
-      <Flexbox align={'center'} distribution={'space-between'} gap={24} horizontal>
-        <Flexbox align={'center'} gap={8} horizontal>
+      <Flexbox horizontal align={'center'} distribution={'space-between'} gap={24}>
+        <Flexbox horizontal align={'center'} gap={8}>
           <PluginAvatar identifier={identifier} />
           <Flexbox gap={4}>
-            <Flexbox align={'center'} gap={8} horizontal>
+            <Flexbox horizontal align={'center'} gap={8}>
               <div>{pluginTitle}</div>
               <Tag>{payload?.apiName}</Tag>
             </Flexbox>
             <div>
-              <Typography.Text ellipsis style={{ fontSize: 12 }} type={'secondary'}>
+              <Text ellipsis style={{ fontSize: 12 }} type={'secondary'}>
                 {args}
-              </Typography.Text>
+              </Text>
             </div>
           </Flexbox>
         </Flexbox>

@@ -1,81 +1,90 @@
+import { type ChatContextContent } from '@lobechat/types';
 import { t } from 'i18next';
-import { StateCreator } from 'zustand/vanilla';
 
 import { notification } from '@/components/AntdStaticMethods';
 import { FILE_UPLOAD_BLACKLIST } from '@/const/file';
 import { fileService } from '@/services/file';
-import { ServerService } from '@/services/file/server';
 import { ragService } from '@/services/rag';
 import { UPLOAD_NETWORK_ERROR } from '@/services/upload';
-import { userService } from '@/services/user';
-import { useAgentStore } from '@/store/agent';
-import {
-  UploadFileListDispatch,
-  uploadFileListReducer,
-} from '@/store/file/reducers/uploadFileList';
-import { useUserStore } from '@/store/user';
-import { preferenceSelectors } from '@/store/user/selectors';
-import { FileListItem } from '@/types/files';
-import { UploadFileItem } from '@/types/files/upload';
+import { type UploadFileListDispatch } from '@/store/file/reducers/uploadFileList';
+import { uploadFileListReducer } from '@/store/file/reducers/uploadFileList';
+import { type StoreSetter } from '@/store/types';
+import { type FileListItem } from '@/types/files';
+import { type UploadFileItem } from '@/types/files/upload';
 import { isChunkingUnsupported } from '@/utils/isChunkingUnsupported';
 import { sleep } from '@/utils/sleep';
 import { setNamespace } from '@/utils/storeDebug';
 
-import { FileStore } from '../../store';
+import { type FileStore } from '../../store';
 
 const n = setNamespace('chat');
 
-const serverFileService = new ServerService();
+type Setter = StoreSetter<FileStore>;
+export const createFileSlice = (set: Setter, get: () => FileStore, _api?: unknown) =>
+  new FileActionImpl(set, get, _api);
 
-export interface FileAction {
-  clearChatUploadFileList: () => void;
-  dispatchChatUploadFileList: (payload: UploadFileListDispatch) => void;
+export class FileActionImpl {
+  readonly #get: () => FileStore;
+  readonly #set: Setter;
 
-  removeChatUploadFile: (id: string) => Promise<void>;
-  startAsyncTask: (
-    fileId: string,
-    runner: (id: string) => Promise<string>,
-    onFileItemChange: (fileItem: FileListItem) => void,
-  ) => Promise<void>;
+  constructor(set: Setter, get: () => FileStore, _api?: unknown) {
+    void _api;
+    this.#set = set;
+    this.#get = get;
+  }
 
-  uploadChatFiles: (files: File[]) => Promise<void>;
-}
+  addChatContextSelection = (context: ChatContextContent): void => {
+    const current = this.#get().chatContextSelections;
+    const next = [context, ...current.filter((item) => item.id !== context.id)];
 
-export const createFileSlice: StateCreator<
-  FileStore,
-  [['zustand/devtools', never]],
-  [],
-  FileAction
-> = (set, get) => ({
-  clearChatUploadFileList: () => {
-    set({ chatUploadFileList: [] }, false, n('clearChatUploadFileList'));
-  },
-  dispatchChatUploadFileList: (payload) => {
-    const nextValue = uploadFileListReducer(get().chatUploadFileList, payload);
-    if (nextValue === get().chatUploadFileList) return;
+    this.#set({ chatContextSelections: next }, false, n('addChatContextSelection'));
+  };
 
-    set({ chatUploadFileList: nextValue }, false, `dispatchChatFileList/${payload.type}`);
-  },
-  removeChatUploadFile: async (id) => {
-    const { dispatchChatUploadFileList } = get();
+  clearChatContextSelections = (): void => {
+    this.#set({ chatContextSelections: [] }, false, n('clearChatContextSelections'));
+  };
+
+  clearChatUploadFileList = (): void => {
+    this.#set({ chatUploadFileList: [] }, false, n('clearChatUploadFileList'));
+  };
+
+  dispatchChatUploadFileList = (payload: UploadFileListDispatch): void => {
+    const nextValue = uploadFileListReducer(this.#get().chatUploadFileList, payload);
+    if (nextValue === this.#get().chatUploadFileList) return;
+
+    this.#set({ chatUploadFileList: nextValue }, false, `dispatchChatFileList/${payload.type}`);
+  };
+
+  removeChatContextSelection = (id: string): void => {
+    const next = this.#get().chatContextSelections.filter((item) => item.id !== id);
+    this.#set({ chatContextSelections: next }, false, n('removeChatContextSelection'));
+  };
+
+  removeChatUploadFile = async (id: string): Promise<void> => {
+    const { dispatchChatUploadFileList } = this.#get();
 
     dispatchChatUploadFileList({ id, type: 'removeFile' });
     await fileService.removeFile(id);
-  },
+  };
 
-  startAsyncTask: async (id, runner, onFileItemUpdate) => {
+  startAsyncTask = async (
+    id: string,
+    runner: (id: string) => Promise<string>,
+    onFileItemUpdate: (fileItem: FileListItem) => void,
+  ): Promise<void> => {
     await runner(id);
 
     let isFinished = false;
 
     while (!isFinished) {
-      // 每间隔 2s 查询一次任务状态
+      // Poll task status every 2 seconds
       await sleep(2000);
 
-      let fileItem: FileListItem | undefined = undefined;
+      let fileItem: FileListItem | undefined;
 
       try {
-        fileItem = await serverFileService.getFileItem(id);
+        const result = await fileService.getKnowledgeItem(id);
+        fileItem = result ?? undefined;
       } catch (e) {
         console.error('getFileItem Error:', e);
         continue;
@@ -94,10 +103,10 @@ export const createFileSlice: StateCreator<
         isFinished = true;
       }
     }
-  },
+  };
 
-  uploadChatFiles: async (rawFiles) => {
-    const { dispatchChatUploadFileList, startAsyncTask } = get();
+  uploadChatFiles = async (rawFiles: File[]): Promise<void> => {
+    const { dispatchChatUploadFileList } = this.#get();
     // 0. skip file in blacklist
     const files = rawFiles.filter((file) => !FILE_UPLOAD_BLACKLIST.includes(file.name));
     // 1. add files with base64
@@ -127,7 +136,7 @@ export const createFileSlice: StateCreator<
       let fileResult: { id: string; url: string } | undefined;
 
       try {
-        fileResult = await get().uploadWithProgress({
+        fileResult = await this.#get().uploadWithProgress({
           file,
           onStatusUpdate: dispatchChatUploadFileList,
         });
@@ -154,54 +163,12 @@ export const createFileSlice: StateCreator<
       // image don't need to be chunked and embedding
       if (isChunkingUnsupported(file.type)) return;
 
-      // 3. auto chunk and embedding
-      dispatchChatUploadFileList({
-        id: fileResult.id,
-        type: 'updateFile',
-        // make the taks empty to hint the user that the task is starting but not triggered
-        value: { tasks: {} },
-      });
-
-      await startAsyncTask(
-        fileResult.id,
-        async (id) => {
-          const data = await ragService.createParseFileTask(id);
-          if (!data || !data.id) throw new Error('failed to createParseFileTask');
-
-          // run the assignment
-          useAgentStore
-            .getState()
-            .addFilesToAgent([id], false)
-            .then(() => {
-              // trigger the tip if it's the first time
-              if (!preferenceSelectors.shouldTriggerFileInKnowledgeBaseTip(useUserStore.getState()))
-                return;
-
-              userService.updateGuide({ uploadFileInKnowledgeBase: true });
-            });
-
-          return data.id;
-        },
-
-        (fileItem) => {
-          dispatchChatUploadFileList({
-            id: fileResult.id,
-            type: 'updateFile',
-            value: {
-              tasks: {
-                chunkCount: fileItem.chunkCount,
-                chunkingError: fileItem.chunkingError,
-                chunkingStatus: fileItem.chunkingStatus,
-                embeddingError: fileItem.embeddingError,
-                embeddingStatus: fileItem.embeddingStatus,
-                finishEmbedding: fileItem.finishEmbedding,
-              },
-            },
-          });
-        },
-      );
+      const data = await ragService.parseFileContent(fileResult.id);
+      console.info('parseFileContent data:', data);
     });
 
     await Promise.all(pools);
-  },
-});
+  };
+}
+
+export type FileAction = Pick<FileActionImpl, keyof FileActionImpl>;

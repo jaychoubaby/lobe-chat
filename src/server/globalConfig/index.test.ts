@@ -1,19 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { getAppConfig } from '@/config/app';
-import { knowledgeEnv } from '@/config/knowledge';
-import { SystemEmbeddingConfig } from '@/types/knowledgeBase';
-import { FilesConfigItem } from '@/types/user/settings/filesConfig';
+import { getAppConfig } from '@/envs/app';
+import { type SystemEmbeddingConfig } from '@/types/knowledgeBase';
+import { type FilesConfigItem } from '@/types/user/settings/filesConfig';
 
 import { getServerDefaultAgentConfig, getServerDefaultFilesConfig } from './index';
 import { parseAgentConfig } from './parseDefaultAgent';
 import { parseFilesConfig } from './parseFilesConfig';
 
-vi.mock('@/config/app', () => ({
+vi.mock('@/envs/app', () => ({
   getAppConfig: vi.fn(),
 }));
 
-vi.mock('@/config/knowledge', () => ({
+vi.mock('@/envs/knowledge', () => ({
   knowledgeEnv: {
     DEFAULT_FILES_CONFIG: 'test_config',
   },

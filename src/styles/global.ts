@@ -1,11 +1,11 @@
-import { Theme, css } from 'antd-style';
-import { rgba } from 'polished';
-
-import { isDesktop } from '@/const/version';
+import { CLASSNAMES } from '@lobehub/ui';
+import type { Theme } from 'antd-style';
+import { css } from 'antd-style';
 
 // fix ios input keyboard
 // overflow: hidden;
 // ref: https://zhuanlan.zhihu.com/p/113855026
+// eslint-disable-next-line unicorn/no-anonymous-default-export
 export default ({ token }: { prefixCls: string; token: Theme }) => css`
   html,
   body,
@@ -18,22 +18,15 @@ export default ({ token }: { prefixCls: string; token: Theme }) => css`
     min-height: 100dvh;
     max-height: 100dvh;
 
-    background: ${token.colorBgLayout};
-
-    @media (min-device-width: 576px) {
+    @media (device-width >= 576px) {
       overflow: hidden;
     }
-  }
-
-  html {
-    background: ${isDesktop ? 'none' : token.colorBgLayout};
   }
 
   body {
     /* 提高合成层级，强制硬件加速，否则会有渲染黑边出现 */
     will-change: opacity;
     transform: translateZ(0);
-    background: ${isDesktop ? rgba(token.colorBgLayout, 0.66) : token.colorBgLayout};
   }
 
   * {
@@ -58,5 +51,19 @@ export default ({ token }: { prefixCls: string; token: Theme }) => css`
     ::-webkit-scrollbar-track {
       background-color: transparent;
     }
+  }
+
+  button {
+    -webkit-app-region: no-drag;
+  }
+
+  .${CLASSNAMES.ContextTrigger}[data-popup-open]:not([data-no-highlight]),
+  .${CLASSNAMES.DropdownMenuTrigger}[data-popup-open]:not([data-no-highlight]) {
+    background: ${token.colorFillTertiary};
+  }
+  .accordion-action:has(
+    .${CLASSNAMES.DropdownMenuTrigger}[data-popup-open]:not([data-no-highlight])
+  ) {
+    opacity: 1;
   }
 `;

@@ -1,47 +1,80 @@
-import { DataSyncConfig } from '@lobechat/electron-client-ipc';
-import { BrowserWindow, app, shell } from 'electron';
 import crypto from 'node:crypto';
 import querystring from 'node:querystring';
 import { URL } from 'node:url';
 
-import { name } from '@/../../package.json';
+import type {
+  AuthorizationProgress,
+  DataSyncConfig,
+  MarketAuthorizationParams,
+} from '@lobechat/electron-client-ipc';
+import { BrowserWindow, shell } from 'electron';
+
+import { appendVercelCookie } from '@/utils/http-headers';
 import { createLogger } from '@/utils/logger';
 
+import { ControllerModule, IpcMethod } from './index';
 import RemoteServerConfigCtr from './RemoteServerConfigCtr';
-import { ControllerModule, ipcClientEvent } from './index';
 
-// Create logger
 const logger = createLogger('controllers:AuthCtr');
 
-const protocolPrefix = `com.lobehub.${name}`;
+const MAX_POLL_TIME = 2 * 60 * 1000; // 2 minutes (reduced from 5 minutes for better UX)
+const POLL_INTERVAL = 3000; // 3 seconds
+const TOKEN_REFRESH_DEBOUNCE = 5 * 60 * 1000; // 5 minutes - debounce interval to prevent excessive refreshes on rapid app restarts
+
 /**
  * Authentication Controller
- * Used to implement the OAuth authorization flow
+ * Implements OAuth authorization flow using intermediate page + polling mechanism
  */
 export default class AuthCtr extends ControllerModule {
+  static override readonly groupName = 'auth';
   /**
-   * 远程服务器配置控制器
+   * Remote server configuration controller
    */
   private get remoteServerConfigCtr() {
     return this.app.getController(RemoteServerConfigCtr);
   }
 
   /**
-   * 当前的 PKCE 参数
+   * Current PKCE parameters
    */
   private codeVerifier: string | null = null;
   private authRequestState: string | null = null;
 
-  beforeAppReady = () => {
-    this.registerProtocolHandler();
-  };
+  /**
+   * Polling related parameters
+   */
+   
+  private pollingInterval: NodeJS.Timeout | null = null;
+  private cachedRemoteUrl: string | null = null;
+
+  /**
+   * Auto-refresh timer
+   */
+   
+  private autoRefreshTimer: NodeJS.Timeout | null = null;
+
+  /**
+   * Construct redirect_uri, ensuring the same URI is used for authorization and token exchange
+   * @param remoteUrl Remote server URL
+   */
+  private constructRedirectUri(remoteUrl: string): string {
+    const callbackUrl = new URL('/oidc/callback/desktop', remoteUrl);
+
+    return callbackUrl.toString();
+  }
 
   /**
    * Request OAuth authorization
    */
-  @ipcClientEvent('requestAuthorization')
+  @IpcMethod()
   async requestAuthorization(config: DataSyncConfig) {
+    // Clear any old authorization state
+    this.clearAuthorizationState();
+
     const remoteUrl = await this.remoteServerConfigCtr.getRemoteServerUrl(config);
+
+    // Cache remote server URL for subsequent polling
+    this.cachedRemoteUrl = remoteUrl;
 
     logger.info(
       `Requesting OAuth authorization, storageMode:${config.storageMode} server URL: ${remoteUrl}`,
@@ -57,8 +90,11 @@ export default class AuthCtr extends ControllerModule {
       this.authRequestState = crypto.randomBytes(16).toString('hex');
       logger.debug(`Generated state parameter: ${this.authRequestState}`);
 
-      // Construct authorization URL
+      // Construct authorization URL with new redirect_uri
       const authUrl = new URL('/oidc/auth', remoteUrl);
+      const redirectUri = this.constructRedirectUri(remoteUrl);
+
+      logger.info('redirectUri', redirectUri);
 
       // Add query parameters
       authUrl.search = querystring.stringify({
@@ -66,7 +102,9 @@ export default class AuthCtr extends ControllerModule {
         code_challenge: codeChallenge,
         code_challenge_method: 'S256',
         prompt: 'consent',
-        redirect_uri: `${protocolPrefix}://auth/callback`,
+        redirect_uri: redirectUri,
+        // https://github.com/lobehub/lobe-chat/pull/8450
+        resource: 'urn:lobehub:chat',
         response_type: 'code',
         scope: 'profile email offline_access',
         state: this.authRequestState,
@@ -78,6 +116,15 @@ export default class AuthCtr extends ControllerModule {
       await shell.openExternal(authUrl.toString());
       logger.debug('Opening authorization URL in default browser');
 
+      this.broadcastAuthorizationProgress({
+        elapsed: 0,
+        maxPollTime: MAX_POLL_TIME,
+        phase: 'browser_opened',
+      });
+
+      // Start polling for credentials
+      this.startPolling();
+
       return { success: true };
     } catch (error) {
       logger.error('Authorization request failed:', error);
@@ -86,157 +133,333 @@ export default class AuthCtr extends ControllerModule {
   }
 
   /**
-   * Handle authorization callback
-   * This method is called when the browser redirects to our custom protocol
+   * Cancel current authorization process
    */
-  async handleAuthCallback(callbackUrl: string) {
-    logger.info(`Handling authorization callback: ${callbackUrl}`);
+  @IpcMethod()
+  async cancelAuthorization() {
+    if (this.authRequestState) {
+      logger.info('User cancelled authorization');
+      this.clearAuthorizationState();
+      this.broadcastAuthorizationProgress({
+        elapsed: 0,
+        maxPollTime: MAX_POLL_TIME,
+        phase: 'cancelled',
+      });
+      return { success: true };
+    }
+    return { error: 'No active authorization', success: false };
+  }
+
+  /**
+   * Request Market OAuth authorization (desktop)
+   */
+  @IpcMethod()
+  async requestMarketAuthorization(params: MarketAuthorizationParams) {
+    const { authUrl } = params;
+
+    if (!authUrl) {
+      const errorMessage = 'Market authorization URL is required';
+      logger.error(errorMessage);
+      return { error: errorMessage, success: false };
+    }
+
+    logger.info(`Requesting market authorization via: ${authUrl}`);
     try {
-      const url = new URL(callbackUrl);
-      const params = new URLSearchParams(url.search);
-
-      // Get authorization code
-      const code = params.get('code');
-      const state = params.get('state');
-      logger.debug(`Got parameters from callback URL: code=${code}, state=${state}`);
-
-      // Validate state parameter to prevent CSRF attacks
-      if (state !== this.authRequestState) {
-        logger.error(
-          `Invalid state parameter: expected ${this.authRequestState}, received ${state}`,
-        );
-        throw new Error('Invalid state parameter');
-      }
-      logger.debug('State parameter validation passed');
-
-      if (!code) {
-        logger.error('No authorization code received');
-        throw new Error('No authorization code received');
-      }
-
-      // Get configuration information
-      const config = await this.remoteServerConfigCtr.getRemoteServerConfig();
-      logger.debug(`Getting remote server configuration: url=${config.remoteServerUrl}`);
-
-      if (config.storageMode === 'selfHost' && !config.remoteServerUrl) {
-        logger.error('Server URL not configured');
-        throw new Error('No server URL configured');
-      }
-
-      // Get the previously saved code_verifier
-      const codeVerifier = this.codeVerifier;
-      if (!codeVerifier) {
-        logger.error('Code verifier not found');
-        throw new Error('No code verifier found');
-      }
-      logger.debug('Found code verifier');
-
-      // Exchange authorization code for token
-      logger.debug('Starting to exchange authorization code for token');
-      const result = await this.exchangeCodeForToken(code, codeVerifier);
-
-      if (result.success) {
-        logger.info('Authorization successful');
-        // Notify render process of successful authorization
-        this.broadcastAuthorizationSuccessful();
-      } else {
-        logger.warn(`Authorization failed: ${result.error || 'Unknown error'}`);
-        // Notify render process of failed authorization
-        this.broadcastAuthorizationFailed(result.error || 'Unknown error');
-      }
-
-      return result;
+      await shell.openExternal(authUrl);
+      logger.debug('Opening market authorization URL in default browser');
+      return { success: true };
     } catch (error) {
-      logger.error('Handling authorization callback failed:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('Market authorization request failed:', error);
+      return { error: message, success: false };
+    }
+  }
 
-      // Notify render process of failed authorization
-      this.broadcastAuthorizationFailed(error.message);
+  /**
+   * Start polling mechanism to get credentials
+   */
+  private startPolling() {
+    if (!this.authRequestState) {
+      logger.error('No handoff ID available for polling');
+      return;
+    }
 
-      return { error: error.message, success: false };
-    } finally {
-      // Clear authorization request state
-      logger.debug('Clearing authorization request state');
-      this.authRequestState = null;
-      this.codeVerifier = null;
+    logger.info('Starting credential polling');
+
+    const startTime = Date.now();
+
+    // Broadcast initial state
+    this.broadcastAuthorizationProgress({
+      elapsed: 0,
+      maxPollTime: MAX_POLL_TIME,
+      phase: 'waiting_for_auth',
+    });
+
+    this.pollingInterval = setInterval(async () => {
+      const elapsed = Date.now() - startTime;
+
+      // Broadcast progress on every tick
+      this.broadcastAuthorizationProgress({
+        elapsed,
+        maxPollTime: MAX_POLL_TIME,
+        phase: 'waiting_for_auth',
+      });
+
+      try {
+        // Check if polling has timed out
+        if (elapsed > MAX_POLL_TIME) {
+          logger.warn('Credential polling timed out');
+          this.clearAuthorizationState();
+          this.broadcastAuthorizationFailed('Authorization timed out');
+          return;
+        }
+
+        // Poll for credentials
+        const result = await this.pollForCredentials();
+
+        if (result) {
+          logger.info('Successfully received credentials from polling');
+          this.stopPolling();
+
+          // Broadcast verifying state
+          this.broadcastAuthorizationProgress({
+            elapsed,
+            maxPollTime: MAX_POLL_TIME,
+            phase: 'verifying',
+          });
+
+          // Validate state parameter
+          if (result.state !== this.authRequestState) {
+            logger.error(
+              `Invalid state parameter: expected ${this.authRequestState}, received ${result.state}`,
+            );
+            this.broadcastAuthorizationFailed('Invalid state parameter');
+            return;
+          }
+
+          // Exchange code for tokens
+          const exchangeResult = await this.exchangeCodeForToken(result.code, this.codeVerifier!);
+
+          if (exchangeResult.success) {
+            logger.info('Authorization successful');
+            this.broadcastAuthorizationSuccessful();
+          } else {
+            logger.warn(`Authorization failed: ${exchangeResult.error || 'Unknown error'}`);
+            this.broadcastAuthorizationFailed(exchangeResult.error || 'Unknown error');
+          }
+        }
+      } catch (error) {
+        logger.error('Error during credential polling:', error);
+        this.clearAuthorizationState();
+        this.broadcastAuthorizationFailed('Polling error: ' + error.message);
+      }
+    }, POLL_INTERVAL);
+  }
+
+  /**
+   * Stop polling
+   */
+  private stopPolling() {
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+    }
+  }
+
+  /**
+   * Clear authorization state
+   * Called before starting a new authorization flow or after authorization failure/timeout
+   */
+  private clearAuthorizationState() {
+    logger.debug('Clearing authorization state');
+    this.stopPolling();
+    this.codeVerifier = null;
+    this.authRequestState = null;
+    this.cachedRemoteUrl = null;
+  }
+
+  /**
+   * Start auto-refresh timer
+   */
+  private startAutoRefresh() {
+    // Stop existing timer first
+    this.stopAutoRefresh();
+
+    const checkInterval = 2 * 60 * 1000; // Check every 2 minutes
+    logger.debug('Starting auto-refresh timer');
+
+    this.autoRefreshTimer = setInterval(async () => {
+      try {
+        // Check if token is expiring soon (refresh 5 minutes in advance)
+        if (!this.remoteServerConfigCtr.isTokenExpiringSoon()) {
+          return;
+        }
+        const expiresAt = this.remoteServerConfigCtr.getTokenExpiresAt();
+        logger.info(
+          `Token is expiring soon, triggering auto-refresh. Expires at: ${expiresAt ? new Date(expiresAt).toISOString() : 'unknown'}`,
+        );
+
+        const result = await this.remoteServerConfigCtr.refreshAccessToken();
+        if (result.success) {
+          logger.info('Auto-refresh successful');
+          this.broadcastTokenRefreshed();
+        } else {
+          logger.error(`Auto-refresh failed after retries: ${result.error}`);
+
+          // Only clear tokens for non-retryable errors (e.g., invalid_grant)
+          // The retry mechanism in RemoteServerConfigCtr already handles transient errors
+          if (this.remoteServerConfigCtr.isNonRetryableError(result.error)) {
+            logger.warn(
+              'Non-retryable error detected, clearing tokens and requiring re-authorization',
+            );
+            this.stopAutoRefresh();
+            await this.remoteServerConfigCtr.clearTokens();
+            await this.remoteServerConfigCtr.setRemoteServerConfig({ active: false });
+            this.broadcastAuthorizationRequired();
+          } else {
+            // For other errors (after retries exhausted), log but don't clear tokens immediately
+            // The next refresh cycle will retry
+            logger.warn('Refresh failed but error may be transient, will retry on next cycle');
+          }
+        }
+      } catch (error) {
+        logger.error('Error during auto-refresh check:', error);
+      }
+    }, checkInterval);
+  }
+
+  /**
+   * Stop auto-refresh timer
+   */
+  private stopAutoRefresh() {
+    if (this.autoRefreshTimer) {
+      clearInterval(this.autoRefreshTimer);
+      this.autoRefreshTimer = null;
+      logger.debug('Stopped auto-refresh timer');
+    }
+  }
+
+  /**
+   * Poll for credentials
+   * Sends HTTP request directly to remote server
+   */
+  private async pollForCredentials(): Promise<{ code: string; state: string } | null> {
+    if (!this.authRequestState || !this.cachedRemoteUrl) {
+      return null;
+    }
+
+    try {
+      // Use cached remote server URL
+      const remoteUrl = this.cachedRemoteUrl;
+
+      // Construct request URL
+      const url = new URL('/oidc/handoff', remoteUrl);
+      url.searchParams.set('id', this.authRequestState);
+      url.searchParams.set('client', 'desktop');
+
+      logger.debug(`Polling for credentials: ${url.toString()}`);
+
+      // Send HTTP request directly
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      appendVercelCookie(headers);
+      const response = await fetch(url.toString(), { headers, method: 'GET' });
+
+      // Check response status
+      if (response.status === 404) {
+        // Credentials not ready yet, this is normal
+        return null;
+      }
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      // Parse response data
+      const data = (await response.json()) as {
+        data: {
+          id: string;
+          payload: { code: string; state: string };
+        };
+        success: boolean;
+      };
+
+      if (data.success && data.data?.payload) {
+        logger.debug('Successfully retrieved credentials from handoff');
+        return {
+          code: data.data.payload.code,
+          state: data.data.payload.state,
+        };
+      }
+
+      return null;
+    } catch (error) {
+      logger.debug('Polling attempt failed (this is normal):', error.message);
+      return null;
     }
   }
 
   /**
    * Refresh access token
+   * This method includes retry mechanism via RemoteServerConfigCtr.refreshAccessToken()
    */
-  @ipcClientEvent('refreshAccessToken')
   async refreshAccessToken() {
     logger.info('Starting to refresh access token');
     try {
-      // Call the centralized refresh logic in RemoteServerConfigCtr
+      // Call the centralized refresh logic in RemoteServerConfigCtr (includes retry)
       const result = await this.remoteServerConfigCtr.refreshAccessToken();
 
       if (result.success) {
         logger.info('Token refresh successful via AuthCtr call.');
         // Notify render process that token has been refreshed
         this.broadcastTokenRefreshed();
+        // Restart auto-refresh timer with new expiration time
+        this.startAutoRefresh();
         return { success: true };
       } else {
-        // Throw an error to be caught by the catch block below
-        // This maintains the existing behavior of clearing tokens on failure
         logger.error(`Token refresh failed via AuthCtr call: ${result.error}`);
-        throw new Error(result.error || 'Token refresh failed');
+
+        // Only clear tokens for non-retryable errors (e.g., invalid_grant)
+        if (this.remoteServerConfigCtr.isNonRetryableError(result.error)) {
+          logger.warn(
+            'Non-retryable error detected, clearing tokens and requiring re-authorization',
+          );
+          this.stopAutoRefresh();
+          await this.remoteServerConfigCtr.clearTokens();
+          await this.remoteServerConfigCtr.setRemoteServerConfig({ active: false });
+          this.broadcastAuthorizationRequired();
+        } else {
+          // For transient errors, don't clear tokens - allow manual retry
+          logger.warn('Refresh failed but error may be transient, tokens preserved for retry');
+        }
+
+        return { error: result.error, success: false };
       }
     } catch (error) {
-      // Keep the existing logic to clear tokens and require re-auth on failure
-      logger.error('Token refresh operation failed via AuthCtr, initiating cleanup:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error('Token refresh operation failed via AuthCtr:', errorMessage);
 
-      // Refresh failed, clear tokens and disable remote server
-      logger.warn('Refresh failed, clearing tokens and disabling remote server');
-      await this.remoteServerConfigCtr.clearTokens();
-      await this.remoteServerConfigCtr.setRemoteServerConfig({ active: false });
+      // Only clear tokens for non-retryable errors
+      if (this.remoteServerConfigCtr.isNonRetryableError(errorMessage)) {
+        logger.warn('Non-retryable error in catch block, clearing tokens');
+        this.stopAutoRefresh();
+        await this.remoteServerConfigCtr.clearTokens();
+        await this.remoteServerConfigCtr.setRemoteServerConfig({ active: false });
+        this.broadcastAuthorizationRequired();
+      }
 
-      // Notify render process that re-authorization is required
-      this.broadcastAuthorizationRequired();
-
-      return { error: error.message, success: false };
+      return { error: errorMessage, success: false };
     }
-  }
-
-  /**
-   * Register custom protocol handler
-   */
-  private registerProtocolHandler() {
-    logger.info(`Registering custom protocol handler ${protocolPrefix}://`);
-    app.setAsDefaultProtocolClient(protocolPrefix);
-
-    // Register custom protocol handler
-    if (process.platform === 'darwin') {
-      // Handle open-url event on macOS
-      logger.debug('Registering open-url event handler for macOS');
-      app.on('open-url', (event, url) => {
-        event.preventDefault();
-        logger.info(`Received open-url event: ${url}`);
-        this.handleAuthCallback(url);
-      });
-    } else {
-      // Handle protocol callback via second-instance event on Windows and Linux
-      logger.debug('Registering second-instance event handler for Windows/Linux');
-      app.on('second-instance', (event, commandLine) => {
-        // Find the URL from command line arguments
-        const url = commandLine.find((arg) => arg.startsWith(`${protocolPrefix}://`));
-        if (url) {
-          logger.info(`Found URL from second-instance command line arguments: ${url}`);
-          this.handleAuthCallback(url);
-        } else {
-          logger.warn('Protocol URL not found in second-instance command line arguments');
-        }
-      });
-    }
-
-    logger.info(`Registered ${protocolPrefix}:// custom protocol handler`);
   }
 
   /**
    * Exchange authorization code for token
    */
   private async exchangeCodeForToken(code: string, codeVerifier: string) {
-    const remoteUrl = await this.remoteServerConfigCtr.getRemoteServerUrl();
+    if (!this.cachedRemoteUrl) {
+      throw new Error('No cached remote URL available for token exchange');
+    }
+
+    const remoteUrl = this.cachedRemoteUrl;
     logger.info('Starting to exchange authorization code for token');
     try {
       const tokenUrl = new URL('/oidc/token', remoteUrl);
@@ -248,16 +471,18 @@ export default class AuthCtr extends ControllerModule {
         code,
         code_verifier: codeVerifier,
         grant_type: 'authorization_code',
-        redirect_uri: `${protocolPrefix}://auth/callback`,
+        redirect_uri: this.constructRedirectUri(remoteUrl),
       });
 
       logger.debug('Sending token exchange request');
       // Send request to get token
+      const tokenHeaders: Record<string, string> = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      };
+      appendVercelCookie(tokenHeaders);
       const response = await fetch(tokenUrl.toString(), {
         body,
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
+        headers: tokenHeaders,
         method: 'POST',
       });
 
@@ -269,10 +494,20 @@ export default class AuthCtr extends ControllerModule {
         throw new Error(errorMessage);
       }
 
+      let data;
+
       // Parse response
-      const data = await response.json();
+      try {
+        data = await response.clone().json();
+      } catch {
+        const status = response.status;
+
+        throw new Error(
+          `Parse JSON failed, please check your server, response status: ${status}, detail:\n\n ${await response.text()} `,
+        );
+      }
+
       logger.debug('Successfully received token exchange response');
-      // console.log(data); // Keep original log for debugging, or remove/change to logger.debug as needed
 
       // Ensure response contains necessary fields
       if (!data.access_token || !data.refresh_token) {
@@ -282,12 +517,19 @@ export default class AuthCtr extends ControllerModule {
 
       // Save tokens
       logger.debug('Starting to save exchanged tokens');
-      await this.remoteServerConfigCtr.saveTokens(data.access_token, data.refresh_token);
+      await this.remoteServerConfigCtr.saveTokens(
+        data.access_token,
+        data.refresh_token,
+        data.expires_in,
+      );
       logger.info('Successfully saved exchanged tokens');
 
       // Set server to active state
       logger.debug(`Setting remote server to active state: ${remoteUrl}`);
       await this.remoteServerConfigCtr.setRemoteServerConfig({ active: true });
+
+      // Start auto-refresh timer
+      this.startAutoRefresh();
 
       return { success: true };
     } catch (error) {
@@ -320,6 +562,21 @@ export default class AuthCtr extends ControllerModule {
     for (const win of allWindows) {
       if (!win.isDestroyed()) {
         win.webContents.send('authorizationSuccessful');
+      }
+    }
+  }
+
+  /**
+   * Broadcast authorization progress event
+   */
+  private broadcastAuthorizationProgress(progress: AuthorizationProgress) {
+    // Avoid logging too frequently
+    // logger.debug('Broadcasting authorizationProgress event');
+    const allWindows = BrowserWindow.getAllWindows();
+
+    for (const win of allWindows) {
+      if (!win.isDestroyed()) {
+        win.webContents.send('authorizationProgress', progress);
       }
     }
   }
@@ -376,7 +633,7 @@ export default class AuthCtr extends ControllerModule {
     // Hash codeVerifier using SHA-256
     const encoder = new TextEncoder();
     const data = encoder.encode(codeVerifier);
-    const digest = await crypto.subtle.digest('SHA-256', data);
+    const digest = await crypto.subtle.digest('SHA-256', data.buffer);
 
     // Convert hash result to base64url encoding
     const challenge = Buffer.from(digest)
@@ -386,5 +643,171 @@ export default class AuthCtr extends ControllerModule {
       .replace(/=+$/, '');
     logger.debug('Generated code challenge (partial): ' + challenge.slice(0, 10) + '...'); // Avoid logging full sensitive info
     return challenge;
+  }
+
+  /**
+   * Initialize after app is ready
+   */
+  afterAppReady() {
+    logger.debug('AuthCtr initialized, checking for existing tokens');
+    this.initializeAutoRefresh();
+  }
+
+  /**
+   * Clean up all timers
+   */
+  cleanup() {
+    logger.debug('Cleaning up AuthCtr timers');
+    this.stopPolling();
+    this.stopAutoRefresh();
+  }
+
+  /**
+   * Initialize auto-refresh functionality
+   * Checks for valid token at app startup and starts auto-refresh timer if token exists
+   * Proactively refreshes token on every startup (with 5-minute debounce to prevent rapid restart issues)
+   */
+  private async initializeAutoRefresh() {
+    try {
+      const config = await this.remoteServerConfigCtr.getRemoteServerConfig();
+
+      // Check if remote server is configured and active
+      if (!(await this.remoteServerConfigCtr.isRemoteServerConfigured(config))) {
+        logger.debug(
+          'Remote server not active or configured, skipping auto-refresh initialization',
+        );
+        return;
+      }
+
+      // Check if valid access token exists
+      const accessToken = await this.remoteServerConfigCtr.getAccessToken();
+      if (!accessToken) {
+        logger.debug('No access token found, skipping auto-refresh initialization');
+        return;
+      }
+
+      // Check if token expiration time exists
+      const expiresAt = this.remoteServerConfigCtr.getTokenExpiresAt();
+      if (!expiresAt) {
+        logger.debug('No token expiration time found, skipping auto-refresh initialization');
+        return;
+      }
+
+      const currentTime = Date.now();
+
+      // Check if token has already expired
+      if (currentTime >= expiresAt) {
+        logger.info('Token has expired, attempting to refresh it');
+        await this.performProactiveRefresh();
+        return;
+      }
+
+      // Proactively refresh token if it hasn't been refreshed in the last 6 hours
+      // This ensures token validity even if the server has revoked it
+      if (this.shouldProactivelyRefresh()) {
+        logger.info('Token refresh interval exceeded, proactively refreshing token on startup');
+        await this.performProactiveRefresh();
+        return;
+      }
+
+      // Start auto-refresh timer
+      logger.info(
+        `Token is valid and recently refreshed, starting auto-refresh timer. Token expires at: ${new Date(expiresAt).toISOString()}`,
+      );
+      this.startAutoRefresh();
+    } catch (error) {
+      logger.error('Error during auto-refresh initialization:', error);
+    }
+  }
+
+  /**
+   * Check if token should be proactively refreshed
+   * Returns true if the token hasn't been refreshed recently (within debounce interval)
+   * This ensures we refresh on every app launch while preventing excessive refreshes on rapid restarts
+   */
+  private shouldProactivelyRefresh(): boolean {
+    const lastRefreshAt = this.remoteServerConfigCtr.getLastTokenRefreshAt();
+
+    // If never refreshed, should refresh
+    if (!lastRefreshAt) {
+      logger.debug('No last refresh time found, should proactively refresh');
+      return true;
+    }
+
+    const timeSinceLastRefresh = Date.now() - lastRefreshAt;
+    const shouldRefresh = timeSinceLastRefresh >= TOKEN_REFRESH_DEBOUNCE;
+
+    if (shouldRefresh) {
+      logger.debug(
+        `Time since last refresh: ${Math.round(timeSinceLastRefresh / 1000 / 60)} minutes, exceeds ${TOKEN_REFRESH_DEBOUNCE / 1000 / 60} minutes debounce threshold`,
+      );
+    } else {
+      logger.debug(
+        `Time since last refresh: ${Math.round(timeSinceLastRefresh / 1000 / 60)} minutes, within ${TOKEN_REFRESH_DEBOUNCE / 1000 / 60} minutes debounce threshold, skipping refresh`,
+      );
+    }
+
+    return shouldRefresh;
+  }
+
+  /**
+   * Perform proactive token refresh (used on startup and app activation)
+   */
+  private async performProactiveRefresh(): Promise<void> {
+    const refreshResult = await this.remoteServerConfigCtr.refreshAccessToken();
+    if (refreshResult.success) {
+      logger.info('Proactive token refresh successful');
+      this.broadcastTokenRefreshed();
+      this.startAutoRefresh();
+    } else {
+      logger.error(`Proactive token refresh failed: ${refreshResult.error}`);
+
+      // Only clear token for non-retryable errors
+      if (this.remoteServerConfigCtr.isNonRetryableError(refreshResult.error)) {
+        logger.warn('Non-retryable error during proactive refresh, clearing tokens');
+        await this.remoteServerConfigCtr.clearTokens();
+        await this.remoteServerConfigCtr.setRemoteServerConfig({ active: false });
+        this.broadcastAuthorizationRequired();
+      } else {
+        // For transient errors, still start auto-refresh timer to retry later
+        logger.warn('Transient error during proactive refresh, will retry via auto-refresh');
+        this.startAutoRefresh();
+      }
+    }
+  }
+
+  /**
+   * Handle app activation event (e.g., Mac dock click, window focus)
+   * Proactively refresh token if needed (respects 6-hour interval)
+   */
+  async onAppActivate(): Promise<void> {
+    logger.debug('App activated, checking if token refresh is needed');
+
+    try {
+      const config = await this.remoteServerConfigCtr.getRemoteServerConfig();
+
+      // Check if remote server is configured and active
+      if (!(await this.remoteServerConfigCtr.isRemoteServerConfigured(config))) {
+        logger.debug('Remote server not active, skipping activation refresh');
+        return;
+      }
+
+      // Check if valid access token exists
+      const accessToken = await this.remoteServerConfigCtr.getAccessToken();
+      if (!accessToken) {
+        logger.debug('No access token found, skipping activation refresh');
+        return;
+      }
+
+      // Only refresh if interval has passed
+      if (this.shouldProactivelyRefresh()) {
+        logger.info('Token refresh interval exceeded on app activation, refreshing token');
+        await this.performProactiveRefresh();
+      } else {
+        logger.debug('Token was recently refreshed, skipping activation refresh');
+      }
+    } catch (error) {
+      logger.error('Error during app activation refresh check:', error);
+    }
   }
 }

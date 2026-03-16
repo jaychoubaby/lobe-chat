@@ -1,12 +1,12 @@
-import debug from 'debug';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
+import debug from 'debug';
+
 import { SOCK_FILE, SOCK_INFO_FILE, WINDOW_PIPE_FILE } from './const';
-import { ServerDispatchEventKey } from './events';
-import { ElectronIPCEventHandler } from './types';
+import type { ElectronIPCEventHandler } from './types';
 
 const log = debug('electron-server-ipc:server');
 
@@ -19,25 +19,25 @@ export class ElectronIPCServer {
   constructor(appId: string, eventHandler: ElectronIPCEventHandler) {
     this.appId = appId;
     const isWindows = process.platform === 'win32';
-    // 创建唯一的套接字路径，避免冲突
+    // Create unique socket path to avoid conflicts
     this.socketPath = isWindows
       ? WINDOW_PIPE_FILE(appId)
       : path.join(os.tmpdir(), SOCK_FILE(appId));
 
-    // 如果是 Unix 套接字，确保文件不存在
+    // For Unix sockets, ensure the file does not exist
     if (!isWindows && fs.existsSync(this.socketPath)) {
       log('Removing existing socket file at: %s', this.socketPath);
       fs.unlinkSync(this.socketPath);
     }
 
-    // 创建服务器
+    // Create server
     log('Creating IPC server');
     this.server = net.createServer(this.handleConnection.bind(this));
 
     this.eventHandler = eventHandler;
   }
 
-  // 启动服务器
+  // Start server
   public start(): Promise<void> {
     log('Starting IPC server');
     return new Promise((resolve, reject) => {
@@ -49,7 +49,7 @@ export class ElectronIPCServer {
       this.server.listen(this.socketPath, () => {
         log('Electron IPC server listening on %s', this.socketPath);
 
-        // 将套接字路径写入临时文件，供 Next.js 服务端读取
+        // Write socket path to temporary file for Next.js server to read
         const tempDir = os.tmpdir();
         const socketInfoPath = path.join(tempDir, SOCK_INFO_FILE(this.appId));
         log('Writing socket info to: %s', socketInfoPath);
@@ -60,7 +60,7 @@ export class ElectronIPCServer {
     });
   }
 
-  // 处理客户端连接
+  // Handle client connection
   private handleConnection(socket: net.Socket): void {
     let dataBuffer = '';
     log('New client connection established');
@@ -70,20 +70,25 @@ export class ElectronIPCServer {
       log('Received data chunk, size: %d bytes', chunk.length);
       dataBuffer += chunk;
 
-      try {
-        // 尝试解析 JSON 消息
-        const message = JSON.parse(dataBuffer);
-        log('Successfully parsed JSON message: %o', {
-          id: message.id,
-          method: message.method,
-        });
-        dataBuffer = ''; // 重置缓冲区
+      // Split messages by \n\n
+      const messages = dataBuffer.split('\n');
+      // Keep the last potentially incomplete message
+      dataBuffer = messages.pop() || '';
 
-        // 处理请求
-        this.handleRequest(socket, message);
-      } catch {
-        // 如果不是有效的 JSON，可能是消息不完整，继续等待
-        log('Incomplete or invalid JSON, buffering for more data');
+      // Process each complete message
+      for (const message of messages) {
+        if (!message.trim()) continue;
+
+        try {
+          const parsedMessage = JSON.parse(message);
+          log('Successfully parsed JSON message: %o', {
+            id: parsedMessage.id,
+            method: parsedMessage.method,
+          });
+          this.handleRequest(socket, parsedMessage);
+        } catch (err) {
+          console.error('Failed to parse message: %s', err);
+        }
       }
     });
 
@@ -96,13 +101,13 @@ export class ElectronIPCServer {
     });
   }
 
-  // 处理客户端请求
+  // Handle client request
   private handleRequest = async (socket: net.Socket, request: any) => {
     const { id, method, params } = request;
     log('Handling request: %s (ID: %s)', method, id);
 
-    // 根据请求方法执行相应的操作
-    const eventHandler = this.eventHandler[method as ServerDispatchEventKey];
+    // Execute corresponding operation based on request method
+    const eventHandler = this.eventHandler[method];
     if (!eventHandler) {
       console.error('No handler found for method: %s', method);
       return;
@@ -121,28 +126,28 @@ export class ElectronIPCServer {
     }
   };
 
-  // 发送结果
+  // Send result
   private sendResult(socket: net.Socket, id: string, result: any): void {
-    const response = JSON.stringify({ id, result }) + '\n';
+    const response = JSON.stringify({ id, result }) + '\n\n';
     log('Sending success response for ID: %s, size: %d bytes', id, response.length);
     socket.write(response);
   }
 
-  // 发送错误
+  // Send error
   private sendError(socket: net.Socket, id: string, error: string): void {
-    const response = JSON.stringify({ error, id }) + '\n';
+    const response = JSON.stringify({ error, id }) + '\n\n';
     log('Sending error response for ID: %s: %s', id, error);
     socket.write(response);
   }
 
-  // 关闭服务器
+  // Close server
   public close(): Promise<void> {
     log('Closing IPC server');
     return new Promise((resolve) => {
       this.server.close(() => {
         log('Electron IPC server closed');
 
-        // 删除套接字文件（Unix 平台）
+        // Delete socket file (Unix platforms)
         if (process.platform !== 'win32' && fs.existsSync(this.socketPath)) {
           log('Removing socket file: %s', this.socketPath);
           fs.unlinkSync(this.socketPath);

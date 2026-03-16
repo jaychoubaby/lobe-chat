@@ -1,0 +1,75 @@
+// @vitest-environment node
+import { ModelProvider } from 'model-bank';
+import type { Mock } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { testProvider } from '../../providerTestUtils';
+import type { XAIModelCard } from './index';
+import { LobeXAI } from './index';
+
+testProvider({
+  Runtime: LobeXAI,
+  provider: ModelProvider.XAI,
+  defaultBaseURL: 'https://api.x.ai/v1',
+  chatDebugEnv: 'DEBUG_XAI_CHAT_COMPLETION',
+  responseDebugEnv: 'DEBUG_XAI_RESPONSES',
+  chatModel: 'grok',
+  test: { useResponsesAPI: true },
+});
+
+describe('LobeXAI - custom features', () => {
+  let instance: InstanceType<typeof LobeXAI>;
+
+  beforeEach(() => {
+    instance = new LobeXAI({ apiKey: 'test_api_key' });
+    vi.spyOn(instance['client'].responses, 'create').mockResolvedValue(new ReadableStream() as any);
+  });
+
+  describe('responses.handlePayload', () => {
+    it('should add web_search and x_search tools when enabledSearch is true', async () => {
+      await instance.chat({
+        enabledSearch: true,
+        messages: [{ content: 'Hello', role: 'user' }],
+        model: 'grok-2',
+        tools: [{ function: { description: 'test', name: 'test' }, type: 'function' as const }],
+      });
+
+      const createCall = (instance['client'].responses.create as Mock).mock.calls[0][0];
+      expect(createCall.tools).toEqual([
+        { description: 'test', name: 'test', type: 'function' },
+        { type: 'web_search' },
+        { type: 'x_search' },
+      ]);
+    });
+
+    it('should add web_search and x_search without existing tools', async () => {
+      await instance.chat({
+        enabledSearch: true,
+        messages: [{ content: 'Hello', role: 'user' }],
+        model: 'grok-2',
+      });
+
+      const createCall = (instance['client'].responses.create as Mock).mock.calls[0][0];
+      expect(createCall.tools).toEqual([{ type: 'web_search' }, { type: 'x_search' }]);
+    });
+  });
+
+  describe('models', () => {
+    it('should fetch and process model list correctly', async () => {
+      const mockModelList: XAIModelCard[] = [
+        { id: 'grok-2' },
+        { id: 'grok-3-mini' },
+        { id: 'grok-4' },
+      ];
+
+      vi.spyOn(instance['client'].models, 'list').mockResolvedValue({
+        data: mockModelList,
+      } as any);
+
+      const models = await instance.models();
+
+      expect(instance['client'].models.list).toHaveBeenCalled();
+      expect(models.length).toBeGreaterThan(0);
+    });
+  });
+});

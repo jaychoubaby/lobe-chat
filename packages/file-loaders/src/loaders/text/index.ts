@@ -1,17 +1,24 @@
 import { readFile } from 'node:fs/promises';
 
+import debug from 'debug';
+
 import type { DocumentPage, FileLoaderInterface } from '../../types';
 
+const log = debug('file-loaders:text');
+
 /**
- * 用于加载纯文本文件的加载器。
+ * Loader for loading plain text files.
  */
 export class TextLoader implements FileLoaderInterface {
   async loadPages(filePath: string): Promise<DocumentPage[]> {
+    log('Loading text file:', filePath);
     try {
       const fileContent = await readFile(filePath, 'utf8');
+      log('Text file loaded successfully, size:', fileContent.length, 'bytes');
       const lines = fileContent.split('\n');
       const lineCount = lines.length;
       const charCount = fileContent.length;
+      log('Text file stats:', { charCount, lineCount });
 
       const page: DocumentPage = {
         charCount,
@@ -23,11 +30,13 @@ export class TextLoader implements FileLoaderInterface {
         pageContent: fileContent,
       };
 
+      log('Text page created successfully');
       return [page];
     } catch (e) {
       const error = e as Error;
+      log('Error encountered while loading text file');
       console.error(`Error loading text file ${filePath}: ${error.message}`);
-      // 如果读取失败，返回一个包含错误信息的 Page
+      // If reading fails, return a Page containing error information
       const errorPage: DocumentPage = {
         charCount: 0,
         lineCount: 0,
@@ -36,18 +45,22 @@ export class TextLoader implements FileLoaderInterface {
         },
         pageContent: '',
       };
+      log('Created error page for failed text file loading');
       return [errorPage];
     }
   }
 
   /**
-   * 对于纯文本，简单地连接所有页面的内容。
-   * （虽然 TextLoader 通常只有一个页面，但保持接口一致性）
-   * @param pages 页面数组
-   * @returns 聚合后的内容
+   * For plain text, simply concatenate the content of all pages.
+   * (Although TextLoader typically has only one page, this maintains interface consistency)
+   * @param pages Array of pages
+   * @returns Aggregated content
    */
   async aggregateContent(pages: DocumentPage[]): Promise<string> {
-    // 默认使用换行符连接，可以根据需要调整或使其可配置
-    return pages.map((page) => page.pageContent).join('\n');
+    log('Aggregating content from', pages.length, 'text pages');
+    // By default, join with newline separator, can be adjusted or made configurable as needed
+    const result = pages.map((page) => page.pageContent).join('\n');
+    log('Content aggregated successfully, length:', result.length);
+    return result;
   }
 }

@@ -2,9 +2,12 @@ import { App } from 'antd';
 import { t } from 'i18next';
 import { useState } from 'react';
 
-import { ImageType, getImageUrl } from './useScreenshot';
+import { getImageUrl,ImageType } from './useScreenshot';
 
-export const useImgToClipboard = ({ id = '#preview', width }: { id?: string; width?: number }) => {
+export const useImgToClipboard = ({
+  id = '#preview',
+  width,
+}: { id?: string; width?: number } = {}) => {
   const [loading, setLoading] = useState(false);
   const { message } = App.useApp();
 
@@ -15,7 +18,7 @@ export const useImgToClipboard = ({ id = '#preview', width }: { id?: string; wid
       const blob = await fetch(dataUrl).then((res) => res.blob());
       navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
       setLoading(false);
-      message.success(t('copySuccess', { defaultValue: 'Copy Success', ns: 'common' }));
+      message.success(t('copySuccess', { ns: 'common' }));
     } catch (error) {
       console.error('Failed to copy image', error);
       setLoading(false);

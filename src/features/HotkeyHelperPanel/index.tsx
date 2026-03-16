@@ -1,11 +1,13 @@
 'use client';
 
-import { Drawer, Grid, Tabs } from '@lobehub/ui';
+import { Grid, Icon, Modal, Segmented } from '@lobehub/ui';
+import { MessageSquare, Settings2 } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useGlobalStore } from '@/store/global';
-import { HotkeyGroupEnum, HotkeyGroupId } from '@/types/hotkey';
+import { type HotkeyGroupId } from '@/types/hotkey';
+import { HotkeyGroupEnum } from '@/types/hotkey';
 
 import HotkeyContent from './HotkeyContent';
 
@@ -20,39 +22,42 @@ const HotkeyHelperPanel = memo(() => {
   const handleClose = () => updateSystemStatus({ showHotkeyHelper: false });
 
   return (
-    <Drawer
-      height={240}
-      mask={false}
-      maskClosable={false}
-      onClose={handleClose}
+    <Modal
+      centered
+      footer={null}
       open={open}
-      placement={'bottom'}
       styles={{
-        bodyContent: { paddingBlock: 24 },
-        title: { paddingBlock: 0 },
+        body: { paddingBlock: 24 },
+        mask: {
+          backdropFilter: 'blur(8px)',
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        },
       }}
       title={
-        <Tabs
-          activeKey={active}
-          compact
-          items={[
+        <Segmented
+          value={active}
+          variant="filled"
+          options={[
             {
-              key: HotkeyGroupEnum.Essential,
+              icon: <Icon icon={Settings2} />,
               label: t('hotkey.group.essential'),
+              value: HotkeyGroupEnum.Essential,
             },
             {
-              key: HotkeyGroupEnum.Conversation,
+              icon: <Icon icon={MessageSquare} />,
               label: t('hotkey.group.conversation'),
+              value: HotkeyGroupEnum.Conversation,
             },
           ]}
           onChange={(key) => setActive(key as HotkeyGroupId)}
         />
       }
+      onCancel={handleClose}
     >
       <Grid gap={32}>
         <HotkeyContent groupId={active} />
       </Grid>
-    </Drawer>
+    </Modal>
   );
 });
 

@@ -12,7 +12,8 @@ describe('useOnPluginStateUpdate', () => {
     // Reset the mock callback after each test
     mockCallback.mockReset();
     // Ensure no event listeners are left hanging after each test
-    window.removeEventListener('message', expect.any(Function));
+    // eslint-disable-next-line unicorn/no-invalid-remove-event-listener
+    window.removeEventListener('message', () => {});
   });
 
   it('calls the callback when a PluginChannel update message is received', () => {

@@ -1,23 +1,26 @@
+import { LoadingOutlined } from '@ant-design/icons';
 import { ModelIcon } from '@lobehub/icons';
-import { ActionIcon } from '@lobehub/ui';
-import { createStyles } from 'antd-style';
+import { Center, Flexbox } from '@lobehub/ui';
+import { Spin } from 'antd';
+import { createStaticStyles, cx } from 'antd-style';
 import { Settings2Icon } from 'lucide-react';
-import { memo } from 'react';
+import { memo, Suspense, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Center, Flexbox } from 'react-layout-kit';
 
 import ModelSwitchPanel from '@/features/ModelSwitchPanel';
+import ModelDetailPanel from '@/features/ModelSwitchPanel/components/ModelDetailPanel';
 import { useAgentStore } from '@/store/agent';
-import { agentSelectors } from '@/store/agent/selectors';
+import { agentByIdSelectors } from '@/store/agent/selectors';
 import { aiModelSelectors, useAiInfraStore } from '@/store/aiInfra';
 
-import ActionPopover from '../../components/ActionPopover';
-import ControlsForm from './ControlsForm';
+import { useAgentId } from '../../hooks/useAgentId';
+import Action from '../components/Action';
+import { useActionBarContext } from '../context';
 
-const useStyles = createStyles(({ css, token, cx }) => ({
+const styles = createStaticStyles(({ css, cssVar }) => ({
   container: css`
-    border-radius: 20px;
-    background: ${token.colorFillTertiary};
+    border-radius: 24px;
+    background: ${cssVar.colorFillTertiary};
   `,
   icon: cx(
     'model-switch',
@@ -27,10 +30,10 @@ const useStyles = createStyles(({ css, token, cx }) => ({
   ),
   model: css`
     cursor: pointer;
-    border-radius: 8px;
+    border-radius: 24px;
 
     :hover {
-      background: ${token.colorFillSecondary};
+      background: ${cssVar.colorFillSecondary};
     }
 
     :active {
@@ -40,35 +43,44 @@ const useStyles = createStyles(({ css, token, cx }) => ({
     }
   `,
   modelWithControl: css`
-    border-radius: 20px;
+    border-radius: 24px;
 
     :hover {
-      background: ${token.colorFillTertiary};
+      background: ${cssVar.colorFillTertiary};
     }
-  `,
-
-  video: css`
-    overflow: hidden;
-    border-radius: 8px;
   `,
 }));
 
 const ModelSwitch = memo(() => {
   const { t } = useTranslation('chat');
-  const { styles, cx } = useStyles();
+  const { dropdownPlacement } = useActionBarContext();
 
-  const [model, provider] = useAgentStore((s) => [
-    agentSelectors.currentAgentModel(s),
-    agentSelectors.currentAgentModelProvider(s),
+  const agentId = useAgentId();
+  const [model, provider, updateAgentConfigById] = useAgentStore((s) => [
+    agentByIdSelectors.getAgentModelById(agentId)(s),
+    agentByIdSelectors.getAgentModelProviderById(agentId)(s),
+    s.updateAgentConfigById,
   ]);
 
   const isModelHasExtendParams = useAiInfraStore(
     aiModelSelectors.isModelHasExtendParams(model, provider),
   );
 
+  const handleModelChange = useCallback(
+    async (params: { model: string; provider: string }) => {
+      await updateAgentConfigById(agentId, params);
+    },
+    [agentId, updateAgentConfigById],
+  );
+
   return (
-    <Flexbox align={'center'} className={isModelHasExtendParams ? styles.container : ''} horizontal>
-      <ModelSwitchPanel>
+    <Flexbox horizontal align={'center'} className={isModelHasExtendParams ? styles.container : ''}>
+      <ModelSwitchPanel
+        model={model}
+        placement={dropdownPlacement}
+        provider={provider}
+        onModelChange={handleModelChange}
+      >
         <Center
           className={cx(styles.model, isModelHasExtendParams && styles.modelWithControl)}
           height={36}
@@ -81,16 +93,32 @@ const ModelSwitch = memo(() => {
       </ModelSwitchPanel>
 
       {isModelHasExtendParams && (
-        <ActionPopover content={<ControlsForm />} minWidth={350} placement={'topLeft'}>
-          <ActionIcon
-            icon={Settings2Icon}
-            style={{ borderRadius: 20, marginInlineStart: -4 }}
-            title={t('extendParams.title')}
-            tooltipProps={{
-              placement: 'bottom',
-            }}
-          />
-        </ActionPopover>
+        <Action
+          icon={Settings2Icon}
+          showTooltip={false}
+          style={{ borderRadius: 24, marginInlineStart: -4 }}
+          title={t('extendParams.title')}
+          popover={{
+            content: (
+              <Suspense
+                fallback={
+                  <Flexbox
+                    align={'center'}
+                    justify={'center'}
+                    style={{ minHeight: 100, width: '100%' }}
+                  >
+                    <Spin indicator={<LoadingOutlined spin />} />
+                  </Flexbox>
+                }
+              >
+                <ModelDetailPanel model={model} provider={provider} />
+              </Suspense>
+            ),
+            maxWidth: 400,
+            minWidth: 400,
+            placement: 'topLeft',
+          }}
+        />
       )}
     </Flexbox>
   );

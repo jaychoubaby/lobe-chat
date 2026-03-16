@@ -9,7 +9,8 @@ describe('useOnPluginReadyForInteraction', () => {
 
   afterEach(() => {
     mockOnReady.mockReset();
-    window.removeEventListener('message', expect.any(Function));
+    // eslint-disable-next-line unicorn/no-invalid-remove-event-listener
+    window.removeEventListener('message', () => {});
   });
 
   it('sets readyForRender to true when a PluginChannel.pluginReadyForRender message is received', async () => {

@@ -1,6 +1,8 @@
 'use client';
 
-import { Button, Form, type FormGroupItemType, type FormItemProps, Tooltip } from '@lobehub/ui';
+import { type FormGroupItemType, type FormItemProps } from '@lobehub/ui';
+import { Button, Form, Tooltip } from '@lobehub/ui';
+import { useUpdateEffect } from 'ahooks';
 import isEqual from 'fast-deep-equal';
 import { Wand2 } from 'lucide-react';
 import { memo, useState } from 'react';
@@ -29,6 +31,10 @@ const AgentMeta = memo(() => {
   const [isInbox, loadingState] = useStore((s) => [s.id === INBOX_SESSION_ID, s.loadingState]);
   const meta = useStore(selectors.currentMetaConfig, isEqual);
   const [background, setBackground] = useState(meta.backgroundColor);
+
+  useUpdateEffect(() => {
+    form.setFieldsValue(meta);
+  }, [meta]);
 
   if (isInbox) return;
 
@@ -62,10 +68,10 @@ const AgentMeta = memo(() => {
         <AutoGenerate
           canAutoGenerate={hasSystemRole}
           loading={loadingState?.[item.key]}
+          placeholder={item.placeholder}
           onGenerate={() => {
             autocompleteMeta(item.key as keyof typeof meta);
           }}
-          placeholder={item.placeholder}
         />
       ),
       label: item.label,
@@ -108,16 +114,16 @@ const AgentMeta = memo(() => {
         <Button
           disabled={!hasSystemRole}
           icon={Wand2}
-          iconPosition={'end'}
+          iconPlacement={'end'}
+          loading={Object.values(loadingState as any).some((i) => !!i)}
+          size={'small'}
           iconProps={{
             size: 12,
           }}
-          loading={Object.values(loadingState as any).some((i) => !!i)}
           onClick={(e: any) => {
             e.stopPropagation();
             autocompleteAllMeta(true);
           }}
-          size={'small'}
         >
           {t('autoGenerate', { ns: 'common' })}
         </Button>
@@ -129,22 +135,13 @@ const AgentMeta = memo(() => {
   return (
     <Form
       disabled={!isAgentEditable}
-      footer={
-        <Form.SubmitFooter
-          texts={{
-            reset: t('submitFooter.reset'),
-            submit: t('settingAgent.submit'),
-            unSaved: t('submitFooter.unSaved'),
-            unSavedWarning: t('submitFooter.unSavedWarning'),
-          }}
-        />
-      }
+      footer={<Form.SubmitFooter />}
       form={form}
       initialValues={meta}
       items={[metaData]}
       itemsType={'group'}
-      onFinish={updateMeta}
       variant={'borderless'}
+      onFinish={updateMeta}
       {...FORM_STYLE}
     />
   );

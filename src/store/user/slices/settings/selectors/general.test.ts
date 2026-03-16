@@ -1,5 +1,6 @@
-import { UserStore } from '@/store/user';
-import { UserState, initialState } from '@/store/user/initialState';
+import { type UserStore } from '@/store/user';
+import { type UserState } from '@/store/user/initialState';
+import { initialState } from '@/store/user/initialState';
 import { merge } from '@/utils/merge';
 
 import { userGeneralSettingsSelectors } from './general';
@@ -15,7 +16,16 @@ describe('settingsSelectors', () => {
 
       const result = userGeneralSettingsSelectors.config(s as UserStore);
 
-      expect(result).toEqual({ fontSize: 12 });
+      expect(result).toEqual({
+        animationMode: 'agile',
+        fontSize: 12,
+        highlighterTheme: 'lobe-theme',
+        isDevMode: false,
+        isLiteMode: false,
+        mermaidTheme: 'lobe-theme',
+        telemetry: true,
+        transitionMode: 'fadeIn',
+      });
     });
   });
 
@@ -107,5 +117,29 @@ describe('settingsSelectors', () => {
 
       expect(result).toBe('#ffffff');
     });
+  });
+
+  it('should return the highlighterTheme', () => {
+    const s: UserState = merge(initialState, {
+      settings: {
+        general: { highlighterTheme: 'lobe-theme' },
+      },
+    });
+
+    const result = userGeneralSettingsSelectors.highlighterTheme(s as UserStore);
+
+    expect(result).toBe('lobe-theme');
+  });
+
+  it('should return the mermaidTheme', () => {
+    const s: UserState = merge(initialState, {
+      settings: {
+        general: { mermaidTheme: 'lobe-theme' },
+      },
+    });
+
+    const result = userGeneralSettingsSelectors.mermaidTheme(s as UserStore);
+
+    expect(result).toBe('lobe-theme');
   });
 });

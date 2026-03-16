@@ -1,9 +1,9 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { PluginStore } from './index';
 
-const baseURL = 'https://chat-plugins.lobehub.com';
+const baseURL = 'https://registry.npmmirror.com/@lobehub/plugins-index/v1/files/public';
 
 describe('PluginStore', () => {
   it('should return the default index URL when no language is provided', () => {

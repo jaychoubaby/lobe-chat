@@ -1,26 +1,24 @@
-import { Icon } from '@lobehub/ui';
-import { Space, Typography } from 'antd';
-import { createStyles } from 'antd-style';
+import { Icon, Text } from '@lobehub/ui';
+import { Space } from 'antd';
+import { createStaticStyles } from 'antd-style';
 import { Puzzle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-const { Title, Paragraph } = Typography;
-
 // Create styles using antd-style
-const useStyles = createStyles(({ token, css }) => ({
+const styles = createStaticStyles(({ css, cssVar }) => ({
   container: css`
     display: flex;
     flex-direction: column;
+    gap: 12px;
     align-items: center;
     justify-content: center;
 
     width: 100%;
     height: 100%;
-    padding: ${token.paddingLG}px;
+    padding: ${cssVar.paddingLG};
   `,
   description: css`
-    max-width: 320px;
-    color: ${token.colorTextSecondary};
+    color: ${cssVar.colorTextSecondary};
     text-align: center;
   `,
   iconWrapper: css`
@@ -30,33 +28,31 @@ const useStyles = createStyles(({ token, css }) => ({
 
     width: 64px;
     height: 64px;
-    margin-block-end: ${token.marginMD}px;
     border-radius: 50%;
 
-    background-color: ${token.colorPrimaryBg};
+    background-color: ${cssVar.colorPrimaryBg};
   `,
   line: css`
     height: 6px;
     border-radius: 3px;
-    background: ${token.colorBorderSecondary};
+    background: ${cssVar.colorBorderSecondary};
   `,
   placeholderLine: css`
     height: 6px;
-    margin-block: ${token.marginXS}px;
+    margin-block: ${cssVar.marginXS};
     margin-inline: 0;
-    border-radius: ${token.borderRadiusLG}px;
+    border-radius: ${cssVar.borderRadiusLG};
 
-    background-color: ${token.colorBorderSecondary};
+    background-color: ${cssVar.colorBorderSecondary};
   `,
   title: css`
-    margin-block-end: ${token.marginXS}px;
-    font-size: ${token.fontSizeLG}px;
+    margin-block-end: ${cssVar.marginXS};
+    font-size: ${cssVar.fontSizeLG};
     font-weight: 500;
   `,
 }));
 
 export default function PluginEmptyState() {
-  const { styles } = useStyles();
   const { t } = useTranslation('plugin');
 
   return (
@@ -64,11 +60,11 @@ export default function PluginEmptyState() {
       <div className={styles.iconWrapper}>
         <Icon icon={Puzzle} size={32} />
       </div>
-      <Title className={styles.title} level={4}>
+      <Text as={'h4'} className={styles.title}>
         {t('dev.preview.empty.title')}
-      </Title>
-      <Paragraph className={styles.description}>{t('dev.preview.empty.desc')}</Paragraph>
-      <Space align="center" direction="vertical" style={{ marginTop: 24 }}>
+      </Text>
+      <Text className={styles.description}>{t('dev.preview.empty.desc')}</Text>
+      <Space align="center" orientation="vertical">
         <div className={styles.line} style={{ width: 128 }} />
         <div className={styles.line} style={{ width: 96 }} />
         <div className={styles.line} style={{ width: 48 }} />

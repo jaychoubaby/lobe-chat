@@ -9,7 +9,8 @@ describe('useOnPluginSettingsUpdate', () => {
 
   afterEach(() => {
     mockCallback.mockReset();
-    window.removeEventListener('message', expect.any(Function));
+    // eslint-disable-next-line unicorn/no-invalid-remove-event-listener
+    window.removeEventListener('message', () => {});
   });
 
   it('calls the callback when a PluginChannel updatePluginSettings message is received', () => {

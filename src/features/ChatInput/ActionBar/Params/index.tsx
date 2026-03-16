@@ -1,33 +1,34 @@
-import { ActionIcon } from '@lobehub/ui';
 import { SlidersHorizontal } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import ActionPopover from '../../components/ActionPopover';
-import ParamsControls from './ParamsControls';
+import { useAgentStore } from '@/store/agent';
+import { agentByIdSelectors } from '@/store/agent/selectors';
+
+import { useAgentId } from '../../hooks/useAgentId';
+import Action from '../components/Action';
+import Controls from './Controls';
 
 const Params = memo(() => {
+  const agentId = useAgentId();
+  const [isLoading] = useAgentStore((s) => [
+    agentByIdSelectors.isAgentConfigLoadingById(agentId)(s),
+  ]);
+  const [updating, setUpdating] = useState(false);
   const { t } = useTranslation('setting');
-  const [popoverOpen, setPopoverOpen] = useState(false);
-  const [isUpdating, setUpdating] = useState(false);
+
+  if (isLoading) return <Action disabled icon={SlidersHorizontal} />;
 
   return (
-    <ActionPopover
-      content={<ParamsControls setUpdating={setUpdating} />}
-      loading={isUpdating}
-      minWidth={400}
-      onOpenChange={setPopoverOpen}
-      open={popoverOpen}
+    <Action
+      icon={SlidersHorizontal}
+      loading={updating}
+      showTooltip={false}
       title={t('settingModel.params.title')}
-    >
-      <ActionIcon
-        icon={SlidersHorizontal}
-        title={t('settingModel.params.title')}
-        tooltipProps={{
-          placement: 'bottom',
-        }}
-      />
-    </ActionPopover>
+      popover={{
+        content: <Controls setUpdating={setUpdating} updating={updating} />,
+      }}
+    />
   );
 });
 
